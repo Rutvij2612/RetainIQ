@@ -1,4 +1,6 @@
 Flask
+Flask-Login
+Flask-SQLAlchemy
 numpy
 pandas
 scikit-learn
@@ -6,3 +8,4 @@ joblib
 matplotlib
 seaborn
 plotly
+xhtml2pdf

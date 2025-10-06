@@ -1,0 +1,23 @@
+<!-- templates/predict.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Predict - RetainIQ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="container">
+    <nav class="topbar">
+        <div class="brand">RetainIQ</div>
+        <div class="actions">
+            <a class="btn" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
+            <a class="btn" href="{{ url_for('logout') }}">Logout</a>
+        </div>
+    </nav>
+    <div class="card">
+        <h2>Single Record Prediction</h2>
+        <p>This page can be enhanced to allow manual feature input and prediction.</p>
+    </div>
+</body>
+</html>
+

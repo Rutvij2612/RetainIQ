@@ -1,0 +1,33 @@
+<!-- templates/signup.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RetainIQ - Signup</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        .auth-card { max-width: 460px; width: 100%; }
+        .error { color: #c0392b; margin-top: 8px; }
+    </style>
+</head>
+<body class="centered-page">
+    <div class="card auth-card">
+        <h1>Create account</h1>
+        <p class="subtitle">Join RetainIQ</p>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('signup') }}" class="form">
+            <label>Username</label>
+            <input type="text" name="username" placeholder="yourname" required>
+            <label>Email</label>
+            <input type="email" name="email" placeholder="you@email.com" required>
+            <label>Password</label>
+            <input type="password" name="password" placeholder="Create a strong password" required>
+            <button type="submit" class="btn primary w-100">Sign up</button>
+        </form>
+        <p class="muted">Already have an account? <a href="{{ url_for('login') }}">Login</a></p>
+    </div>
+</body>
+</html>
+
