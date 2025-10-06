@@ -1,10 +1,25 @@
 // Basic interactive dashboard script for RetainIQ
 (function(){
+  // Sections and buttons
+  const sectionDataset = document.getElementById('sectionDataset');
+  const sectionAdd = document.getElementById('sectionAdd');
+  const sectionModify = document.getElementById('sectionModify');
+  const sectionDelete = document.getElementById('sectionDelete');
+  const sectionAnalysis = document.getElementById('sectionAnalysis');
+  const sectionVisuals = document.getElementById('sectionVisuals');
+
+  const btnViewDataset = document.getElementById('btnViewDataset');
+  const btnAddRecord = document.getElementById('btnAddRecord');
+  const btnModifyRecord = document.getElementById('btnModifyRecord');
+  const btnDeleteRecord = document.getElementById('btnDeleteRecord');
+  const btnViewAnalysis = document.getElementById('btnViewAnalysis');
+  const btnVisualizeGraphs = document.getElementById('btnVisualizeGraphs');
+
   const table = document.getElementById('dataTable');
   const filterInput = document.getElementById('filterText');
   const refreshBtn = document.getElementById('refreshData');
-  const addBtn = document.getElementById('addRow');
-  const statsDiv = document.getElementById('stats');
+  const visualsContainer = document.getElementById('visualsContainer');
+  const analysisText = document.getElementById('analysisText');
 
   let rows = [];
   let columns = [];
@@ -22,11 +37,14 @@
   async function fetchStats(){
     const res = await fetch('/api/stats');
     const s = await res.json();
-    statsDiv.innerHTML = `
-      <div class="grid">
+    analysisText.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;">
         <div><strong>Total</strong><div>${s.total_records}</div></div>
         <div><strong>Churn rate</strong><div>${(s.churn_rate*100).toFixed(1)}%</div></div>
+        <div><strong>Churn counts</strong><div>${Object.entries(s.churn_counts||{}).map(([k,v])=>`${k}:${v}`).join(', ')}</div></div>
       </div>
+      <h3>Feature Importance</h3>
+      <pre style="white-space:pre-wrap;">${JSON.stringify(s.feature_importance||{}, null, 2)}</pre>
     `;
   }
 
@@ -95,17 +113,108 @@
   filterInput?.addEventListener('input', ()=> renderTable());
   refreshBtn?.addEventListener('click', async ()=>{ await fetchData(); await refreshPlots(); });
 
-  addBtn?.addEventListener('click', async ()=>{
-    const featureCols = columns.filter(c=>c!=='RecordID' && c!=='Churn Value');
+  // Dynamic forms for Add / Modify / Delete
+  async function renderAddForm(){
+    const container = sectionAdd;
+    container.innerHTML = '<h2>Add New Record</h2><div id="addForm"></div>';
+    const schema = await (await fetch('/api/schema')).json();
+    const featureFields = schema.filter(f=>f.required);
+    const form = document.createElement('form');
+    form.className = 'form';
+    featureFields.forEach(f=>{
+      const label = document.createElement('label'); label.textContent = f.name;
+      const input = f.choices ? buildSelect(f) : buildInput(f);
+      form.appendChild(label); form.appendChild(input);
+    });
+    const submit = document.createElement('button'); submit.className='btn primary'; submit.type='submit'; submit.textContent='Add';
+    form.appendChild(submit);
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const payload = collectForm(form);
+      const res = await fetch('/api/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      if(res.ok){ await fetchData(); await refreshPlots(); alert('Record added'); }
+      else { alert('Failed to add record'); }
+    });
+    container.appendChild(form);
+  }
+
+  function buildInput(f){
+    const input = document.createElement('input');
+    input.required = !!f.required;
+    input.name = f.name;
+    input.placeholder = f.name;
+    input.type = f.type === 'number' ? 'number' : 'text';
+    return input;
+  }
+  function buildSelect(f){
+    const select = document.createElement('select');
+    select.name = f.name; select.required = !!f.required;
+    const blank = document.createElement('option'); blank.value=''; blank.textContent='-- select --'; select.appendChild(blank);
+    (f.choices||[]).forEach(v=>{ const opt=document.createElement('option'); opt.value=v; opt.textContent=v; select.appendChild(opt); });
+    return select;
+  }
+  function collectForm(form){
     const payload = {};
-    for(const c of featureCols){
-      const v = prompt(`Enter value for ${c}`);
-      if(v===null) return; // cancel
-      payload[c] = parseIfNumber(v);
-    }
-    const res = await fetch('/api/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-    if(res.ok){ await fetchData(); await refreshPlots(); }
-  });
+    new FormData(form).forEach((v,k)=>{ payload[k] = parseIfNumber(v); });
+    return payload;
+  }
+
+  async function renderModifyForm(){
+    const container = sectionModify;
+    container.innerHTML = '<h2>Modify Existing Record</h2><div style="display:flex; gap:8px; align-items:end;"><div><label>RecordID</label><input id="modId" type="number" placeholder="RecordID"></div><button class="btn" id="loadMod">Load</button></div><div id="modFormWrap"></div>';
+    document.getElementById('loadMod').onclick = ()=>loadForModify();
+  }
+  async function loadForModify(){
+    const id = Number(document.getElementById('modId').value);
+    if(!id) return;
+    const rec = rows.find(r=>Number(r.RecordID)===id);
+    if(!rec) { alert('Record not found'); return; }
+    const schema = await (await fetch('/api/schema')).json();
+    const fields = schema.filter(f=>f.name!=='RecordID');
+    const wrap = document.getElementById('modFormWrap');
+    wrap.innerHTML='';
+    const form = document.createElement('form'); form.className='form';
+    fields.forEach(f=>{
+      const label = document.createElement('label'); label.textContent = f.name;
+      const input = f.choices ? buildSelect(f) : buildInput(f);
+      input.value = rec[f.name] ?? '';
+      form.appendChild(label); form.appendChild(input);
+    });
+    const submit = document.createElement('button'); submit.className='btn primary'; submit.type='submit'; submit.textContent='Save';
+    form.appendChild(submit);
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const payload = collectForm(form); delete payload.RecordID;
+      const res = await fetch(`/api/data/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      if(res.ok){ await fetchData(); await refreshPlots(); alert('Record updated'); }
+      else { alert('Failed to update'); }
+    });
+    wrap.appendChild(form);
+  }
+
+  async function renderDeleteForm(){
+    const container = sectionDelete;
+    container.innerHTML = '<h2>Delete Record</h2><div style="display:flex; gap:8px; align-items:end;"><div><label>RecordID</label><input id="delId" type="number" placeholder="RecordID"></div><button class="btn" id="doDelete">Delete</button></div>';
+    document.getElementById('doDelete').onclick = async ()=>{
+      const id = Number(document.getElementById('delId').value);
+      if(!id) return; if(!confirm('Delete this record?')) return;
+      const res = await fetch(`/api/data/${id}`, { method:'DELETE' });
+      if(res.ok){ await fetchData(); await refreshPlots(); alert('Deleted'); }
+      else { alert('Record not found'); }
+    };
+  }
+
+  // Interactive Visualizations (Plotly) using image refresh fallback
+  async function renderVisuals(){
+    visualsContainer.innerHTML = '';
+    await refreshPlots();
+    const imgs = ['churn_plot.png','monthly_charges_plot.png','city_plot.png','feature_importance_plot.png'];
+    imgs.forEach(name=>{
+      const img = document.createElement('img');
+      img.src = `/static/${name}?t=${Date.now()}`;
+      visualsContainer.appendChild(img);
+    });
+  }
 
   async function refreshPlots(){
     await fetch('/api/refresh_plots', { method:'POST' });
@@ -113,7 +222,20 @@
     document.querySelectorAll('img').forEach(img=>{ if(img.src.includes('/static/')) img.src = img.src.split('?')[0] + `?t=${Date.now()}`; });
   }
 
+  function showOnly(section){
+    [sectionDataset, sectionAdd, sectionModify, sectionDelete, sectionAnalysis, sectionVisuals].forEach(s=>{ if(s) s.style.display='none'; });
+    if(section) section.style.display = '';
+  }
+
+  // Wire up action buttons
+  btnViewDataset?.addEventListener('click', async ()=>{ showOnly(sectionDataset); if(rows.length===0) await fetchData(); });
+  btnAddRecord?.addEventListener('click', async ()=>{ showOnly(sectionAdd); await renderAddForm(); });
+  btnModifyRecord?.addEventListener('click', async ()=>{ showOnly(sectionModify); if(rows.length===0) await fetchData(); await renderModifyForm(); });
+  btnDeleteRecord?.addEventListener('click', async ()=>{ showOnly(sectionDelete); await renderDeleteForm(); });
+  btnViewAnalysis?.addEventListener('click', async ()=>{ showOnly(sectionAnalysis); await fetchStats(); });
+  btnVisualizeGraphs?.addEventListener('click', async ()=>{ showOnly(sectionVisuals); await renderVisuals(); });
+
   // init
-  if(table){ fetchData(); }
+  // default shows only actions; sections remain hidden until clicked
 })();
 

@@ -29,32 +29,46 @@
     </nav>
 
     <main class="container">
-        <div class="layout">
-            <section class="card">
-                <div class="toolbar">
-                    <h2>Dataset</h2>
-                    <div class="filters">
-                        <input id="filterText" placeholder="Filter by City or Zip" />
-                        <button class="btn" id="refreshData">Refresh</button>
-                        <button class="btn primary" id="addRow">Add Record</button>
-                    </div>
-                </div>
-                <div class="table-container">
-                    <table id="dataTable"></table>
-                </div>
-            </section>
+        <section class="card">
+            <h2>Actions</h2>
+            <div class="actions" style="display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 4px;">
+                <button class="btn" id="btnViewDataset">View Dataset</button>
+                <button class="btn" id="btnAddRecord">Add New Record</button>
+                <button class="btn" id="btnModifyRecord">Modify Existing Record</button>
+                <button class="btn" id="btnDeleteRecord">Delete Record</button>
+                <button class="btn" id="btnViewAnalysis">View Analysis</button>
+                <button class="btn" id="btnVisualizeGraphs">Visualize Graphs</button>
+                <a class="btn" id="btnExportPDF" href="{{ url_for('report_pdf') }}">Export as PDF</a>
+            </div>
+        </section>
 
-            <section class="card">
-                <h2>Key Stats</h2>
-                <div id="stats"></div>
-                <h3 style="margin-top:16px">Visualizations</h3>
-                <div class="plots">
-                    {% for plot in plots %}
-                    <img src="{{ url_for('static', filename=plot) }}" alt="{{ plot }}" />
-                    {% endfor %}
+        <!-- Hidden Sections, revealed on demand -->
+        <section class="card" id="sectionDataset" style="display:none;">
+            <div class="toolbar">
+                <h2>Dataset</h2>
+                <div class="filters">
+                    <input id="filterText" placeholder="Filter by City or Zip" />
+                    <button class="btn" id="refreshData">Refresh</button>
                 </div>
-            </section>
-        </div>
+            </div>
+            <div class="table-container">
+                <table id="dataTable"></table>
+            </div>
+        </section>
+
+        <section class="card" id="sectionAdd" style="display:none;"></section>
+        <section class="card" id="sectionModify" style="display:none;"></section>
+        <section class="card" id="sectionDelete" style="display:none;"></section>
+
+        <section class="card" id="sectionAnalysis" style="display:none;">
+            <h2>Analysis</h2>
+            <div id="analysisText"></div>
+        </section>
+
+        <section class="card" id="sectionVisuals" style="display:none;">
+            <h2>Interactive Visualizations</h2>
+            <div id="visualsContainer" class="plots"></div>
+        </section>
     </main>
 
     <template id="rowFormTemplate">
@@ -62,9 +76,7 @@
     </template>
 
     <script>
-        window.RetainIQ = {
-            columns: {{ plots|length }} // placeholder to avoid empty object; real columns fetched via /api/data
-        }
+        window.RetainIQ = { };
     </script>
 </body>
 </html>

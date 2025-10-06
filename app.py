@@ -13,6 +13,7 @@ import io
 import os
 from datetime import datetime
 from xhtml2pdf import pisa
+global df
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_change_me')
@@ -122,6 +123,30 @@ def predict_churn(record: dict) -> int:
     return int(pred)
 
 
+def infer_schema(current_df: pd.DataFrame) -> list:
+    schema = []
+    for col in current_df.columns:
+        if col in ['RecordID', 'Churn Value']:
+            required = False
+        else:
+            required = True
+        dtype = str(current_df[col].dtype)
+        col_type = 'number' if any(x in dtype for x in ['int', 'float']) else 'text'
+        # include limited choices for small-cardinality categoricals
+        choices = None
+        if col_type == 'text':
+            unique_vals = current_df[col].dropna().unique()
+            if len(unique_vals) > 0 and len(unique_vals) <= 20:
+                choices = sorted([str(v) for v in unique_vals])
+        schema.append({
+            'name': col,
+            'type': col_type,
+            'required': required,
+            'choices': choices
+        })
+    return schema
+
+
 @app.route('/')
 def index():
     if current_user.is_authenticated:
@@ -173,8 +198,7 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    plots = generate_plots(df)
-    return render_template('dashboard.html', plots=list(plots.values()))
+    return render_template('dashboard.html')
 
 
 # -----------------------------
@@ -184,6 +208,12 @@ def dashboard():
 @login_required
 def get_data():
     return jsonify(df.to_dict(orient='records'))
+
+
+@app.route('/api/schema', methods=['GET'])
+@login_required
+def get_schema():
+    return jsonify(infer_schema(df))
 
 
 @app.route('/api/data', methods=['POST'])
@@ -200,7 +230,7 @@ def add_record():
     churn = predict_churn(record)
     record['Churn Value'] = churn
     record['RecordID'] = new_id
-    global df
+
     df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
     save_df()
     generate_plots(df)
@@ -246,13 +276,24 @@ def delete_record(record_id: int):
 def stats():
     total = len(df)
     churn_rate = float(df['Churn Value'].mean()) if 'Churn Value' in df.columns and total > 0 else 0.0
+    churn_counts = df['Churn Value'].value_counts().to_dict() if 'Churn Value' in df.columns else {}
     by_city = df['City'].value_counts().head(10).to_dict() if 'City' in df.columns else {}
-    numeric_summary = df.describe(include='all').fillna('').to_dict()
+    summary = df.describe(include='all').fillna('').to_dict()
+    feature_columns = [c for c in df.columns if c not in ['Churn Value', 'City', 'Zip Code', 'RecordID']]
+    importances = None
+    try:
+        if len(getattr(rf_model, 'feature_importances_', [])) == len(feature_columns):
+            s = pd.Series(rf_model.feature_importances_, index=feature_columns).sort_values(ascending=False)
+            importances = s.head(15).round(4).to_dict()
+    except Exception:
+        importances = None
     return jsonify({
         'total_records': total,
         'churn_rate': churn_rate,
+        'churn_counts': churn_counts,
         'top_cities': by_city,
-        'summary': numeric_summary
+        'summary': summary,
+        'feature_importance': importances
     })
 
 
@@ -274,11 +315,14 @@ def render_pdf_from_html(source_html: str, output_filename: str) -> bytes:
 @login_required
 def report_pdf():
     plots = generate_plots(df)
+    # limited snapshot of dataset for PDF
+    snapshot = df.head(30).copy()
     stats_resp = {
         'total_records': len(df),
-        'churn_rate': float(df['Churn Value'].mean()) if 'Churn Value' in df.columns and len(df) > 0 else 0.0
+        'churn_rate': float(df['Churn Value'].mean()) if 'Churn Value' in df.columns and len(df) > 0 else 0.0,
+        'churn_counts': df['Churn Value'].value_counts().to_dict() if 'Churn Value' in df.columns else {},
     }
-    html = render_template('report.html', plots=plots, stats=stats_resp, now=datetime.utcnow())
+    html = render_template('report.html', plots=plots, stats=stats_resp, now=datetime.utcnow(), columns=list(snapshot.columns), rows=snapshot.to_dict(orient='records'))
     pdf_bytes = render_pdf_from_html(html, 'report.pdf')
     return send_file(io.BytesIO(pdf_bytes), mimetype='application/pdf', as_attachment=True, download_name='retainiq_report.pdf')
 
