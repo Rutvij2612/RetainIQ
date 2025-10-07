@@ -79,7 +79,7 @@
   }
 
   function parseIfNumber(v){
-    if(v==='' || v===null || v===undefined) return v;
+    if(v==='\n' || v==='' || v===null || v===undefined) return v;
     const n = Number(v);
     return Number.isNaN(n) ? v : n;
   }
@@ -92,12 +92,12 @@
       const payload = collectRow(id);
       delete payload.RecordID;
       const res = await fetch(`/api/data/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if(res.ok){ await fetchData(); await refreshPlots(); }
+      if(res.ok){ await fetchData(); await renderVisuals(); }
     }
     if(btn.dataset.action==='delete'){
       if(!confirm('Delete this record?')) return;
       const res = await fetch(`/api/data/${id}`, { method:'DELETE' });
-      if(res.ok){ await fetchData(); await refreshPlots(); }
+      if(res.ok){ await fetchData(); await renderVisuals(); }
     }
   });
 
@@ -111,7 +111,7 @@
   });
 
   filterInput?.addEventListener('input', ()=> renderTable());
-  refreshBtn?.addEventListener('click', async ()=>{ await fetchData(); await refreshPlots(); });
+  refreshBtn?.addEventListener('click', async ()=>{ await fetchData(); await renderVisuals(); });
 
   // Dynamic forms for Add / Modify / Delete
   async function renderAddForm(){
@@ -132,7 +132,7 @@
       e.preventDefault();
       const payload = collectForm(form);
       const res = await fetch('/api/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if(res.ok){ await fetchData(); await refreshPlots(); alert('Record added'); }
+      if(res.ok){ await fetchData(); await renderVisuals(); alert('Record added'); }
       else { alert('Failed to add record'); }
     });
     container.appendChild(form);
@@ -186,7 +186,7 @@
       e.preventDefault();
       const payload = collectForm(form); delete payload.RecordID;
       const res = await fetch(`/api/data/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if(res.ok){ await fetchData(); await refreshPlots(); alert('Record updated'); }
+      if(res.ok){ await fetchData(); await renderVisuals(); alert('Record updated'); }
       else { alert('Failed to update'); }
     });
     wrap.appendChild(form);
@@ -199,27 +199,22 @@
       const id = Number(document.getElementById('delId').value);
       if(!id) return; if(!confirm('Delete this record?')) return;
       const res = await fetch(`/api/data/${id}`, { method:'DELETE' });
-      if(res.ok){ await fetchData(); await refreshPlots(); alert('Deleted'); }
+      if(res.ok){ await fetchData(); await renderVisuals(); alert('Deleted'); }
       else { alert('Record not found'); }
     };
   }
 
-  // Interactive Visualizations (Plotly) using image refresh fallback
+  // Interactive Visualizations: fetch URLs from backend and render images
   async function renderVisuals(){
     visualsContainer.innerHTML = '';
-    await refreshPlots();
-    const imgs = ['churn_plot.png','monthly_charges_plot.png','city_plot.png','feature_importance_plot.png'];
-    imgs.forEach(name=>{
+    const res = await fetch('/api/refresh_plots', { method:'POST' });
+    const data = await res.json();
+    const urls = data.plots || {};
+    Object.values(urls).forEach(u=>{
       const img = document.createElement('img');
-      img.src = `/static/${name}?t=${Date.now()}`;
+      img.src = `${u}?t=${Date.now()}`;
       visualsContainer.appendChild(img);
     });
-  }
-
-  async function refreshPlots(){
-    await fetch('/api/refresh_plots', { method:'POST' });
-    // hard refresh plot images to bypass cache
-    document.querySelectorAll('img').forEach(img=>{ if(img.src.includes('/static/')) img.src = img.src.split('?')[0] + `?t=${Date.now()}`; });
   }
 
   function showOnly(section){

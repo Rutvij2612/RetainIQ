@@ -45,45 +45,67 @@ def load_user(user_id):
 
 
 models_dir = os.path.join(app.root_path, 'models')
+user_data_dir = os.path.join(models_dir, 'user_data')
 static_dir = os.path.join(app.root_path, 'static')
 os.makedirs(static_dir, exist_ok=True)
+os.makedirs(user_data_dir, exist_ok=True)
 
 # Load model
 rf_model = joblib.load(os.path.join(models_dir, 'rf_model.pkl'))
 
-# Load dataset and ensure a primary key exists
-csv_path = os.path.join(models_dir, 'cleaned_data.csv')
-df = pd.read_csv(csv_path)
-if 'RecordID' not in df.columns:
-    df.insert(0, 'RecordID', range(1, len(df) + 1))
-    df.to_csv(csv_path, index=False)
+# Base dataset (used to initialize per-user copies)
+base_csv_path = os.path.join(models_dir, 'cleaned_data.csv')
+base_df = pd.read_csv(base_csv_path)
+if 'RecordID' not in base_df.columns:
+    base_df.insert(0, 'RecordID', range(1, len(base_df) + 1))
+    base_df.to_csv(base_csv_path, index=False)
 
 
-def save_df():
-    df.to_csv(csv_path, index=False)
+def user_csv_path(user_id: int) -> str:
+    return os.path.join(user_data_dir, f'cleaned_data_user_{user_id}.csv')
 
 
-def generate_plots(current_df: pd.DataFrame) -> dict:
+def ensure_user_dataset(user_id: int) -> None:
+    path = user_csv_path(user_id)
+    if not os.path.exists(path):
+        base_df.to_csv(path, index=False)
+
+
+def load_user_df(user_id: int) -> pd.DataFrame:
+    ensure_user_dataset(user_id)
+    dfu = pd.read_csv(user_csv_path(user_id))
+    if 'RecordID' not in dfu.columns:
+        dfu.insert(0, 'RecordID', range(1, len(dfu) + 1))
+        dfu.to_csv(user_csv_path(user_id), index=False)
+    return dfu
+
+
+def save_user_df(user_id: int, dfu: pd.DataFrame) -> None:
+    dfu.to_csv(user_csv_path(user_id), index=False)
+
+
+def generate_plots(current_df: pd.DataFrame, user_id: int | None = None) -> dict:
     plots = {}
+    suffix = f'_user_{user_id}' if user_id is not None else ''
     # Churn Distribution
     if 'Churn Value' in current_df.columns:
         plt.figure(figsize=(5, 4))
         sns.countplot(x='Churn Value', data=current_df, palette='Set2')
         plt.title('Churn Distribution')
-        out = os.path.join(static_dir, 'churn_plot.png')
+        out = os.path.join(static_dir, f'churn_plot{suffix}.png')
         plt.savefig(out, bbox_inches='tight')
         plt.close()
-        plots['churn_plot'] = 'churn_plot.png'
+        plots['churn_plot'] = os.path.basename(out)
 
     # Monthly Charges vs Churn
     if {'Monthly Charges', 'Churn Value'}.issubset(current_df.columns):
         plt.figure(figsize=(8, 5))
         sns.boxplot(data=current_df, x='Churn Value', y='Monthly Charges', palette='Set2')
         plt.title('Monthly Charges vs Churn')
-        out = os.path.join(static_dir, 'monthly_charges_plot.png')
+        out = os.path.join(static_dir, f'monthly_charges_plot{suffix}.png')
         plt.savefig(out, bbox_inches='tight')
         plt.close()
-        plots['monthly_charges_plot'] = 'monthly_charges_plot.png'
+        plots['monthly_charges_plot'] = os.path.basename(out)
 
     # City top 10
     if 'City' in current_df.columns and 'Churn Value' in current_df.columns:
@@ -92,10 +114,10 @@ def generate_plots(current_df: pd.DataFrame) -> dict:
         sns.countplot(data=current_df[current_df['City'].isin(top_cities)], x='City', hue='Churn Value', palette='coolwarm')
         plt.title('Churn by Top 10 Cities')
         plt.xticks(rotation=45)
-        out = os.path.join(static_dir, 'city_plot.png')
+        out = os.path.join(static_dir, f'city_plot{suffix}.png')
         plt.savefig(out, bbox_inches='tight')
         plt.close()
-        plots['city_plot'] = 'city_plot.png'
+        plots['city_plot'] = os.path.basename(out)
 
     # Feature Importances if shapes match
     try:
@@ -106,18 +128,18 @@ def generate_plots(current_df: pd.DataFrame) -> dict:
             plt.figure(figsize=(10, 6))
             sns.barplot(x=feat_imp[:10], y=feat_imp[:10].index, palette='viridis')
             plt.title('Top 10 Feature Importances - Random Forest')
-            out = os.path.join(static_dir, 'feature_importance_plot.png')
+            out = os.path.join(static_dir, f'feature_importance_plot{suffix}.png')
             plt.savefig(out, bbox_inches='tight')
             plt.close()
-            plots['feature_importance_plot'] = 'feature_importance_plot.png'
+            plots['feature_importance_plot'] = os.path.basename(out)
     except Exception:
         pass
 
     return plots
 
 
-def predict_churn(record: dict) -> int:
-    feature_columns = [c for c in df.columns if c not in ['Churn Value', 'RecordID']]
+def predict_churn(record: dict, reference_df: pd.DataFrame) -> int:
+    feature_columns = [c for c in reference_df.columns if c not in ['Churn Value', 'RecordID']]
     X = pd.DataFrame([record], columns=feature_columns)
     pred = rf_model.predict(X)[0]
     return int(pred)
@@ -145,6 +167,41 @@ def infer_schema(current_df: pd.DataFrame) -> list:
             'choices': choices
         })
     return schema
+
+
+def validate_and_coerce(payload: dict, df_ref: pd.DataFrame) -> tuple[dict, list[str]]:
+    errors: list[str] = []
+    coerced: dict = {}
+    describe = df_ref.describe(include='all')
+    for col in df_ref.columns:
+        if col in ['RecordID', 'Churn Value']:
+            continue
+        val = payload.get(col)
+        if val is None:
+            errors.append(f'Missing field: {col}')
+            continue
+        dtype = str(df_ref[col].dtype)
+        if any(x in dtype for x in ['int', 'float']):
+            try:
+                num = float(val)
+                if col in describe.columns:
+                    minv = describe[col].get('min')
+                    maxv = describe[col].get('max')
+                    if pd.notna(minv) and num < float(minv):
+                        errors.append(f'{col} below min {minv}')
+                    if pd.notna(maxv) and num > float(maxv):
+                        errors.append(f'{col} above max {maxv}')
+                if 'int' in dtype:
+                    num = int(round(num))
+                coerced[col] = num
+            except Exception:
+                errors.append(f'{col} must be a number')
+        else:
+            if isinstance(val, str) and val.lower() in ['true','false']:
+                coerced[col] = True if val.lower()=='true' else False
+            else:
+                coerced[col] = val
+    return coerced, errors
 
 
 @app.route('/')
@@ -207,79 +264,80 @@ def dashboard():
 @app.route('/api/data', methods=['GET'])
 @login_required
 def get_data():
-    return jsonify(df.to_dict(orient='records'))
+    dfu = load_user_df(current_user.id)
+    return jsonify(dfu.to_dict(orient='records'))
 
 
 @app.route('/api/schema', methods=['GET'])
 @login_required
 def get_schema():
-    return jsonify(infer_schema(df))
+    dfu = load_user_df(current_user.id)
+    return jsonify(infer_schema(dfu))
 
 
 @app.route('/api/data', methods=['POST'])
 @login_required
 def add_record():
+    dfu = load_user_df(current_user.id)
     payload = request.get_json(force=True)
-    required_cols = [c for c in df.columns if c not in ['RecordID', 'Churn Value']]
-    for c in required_cols:
-        if c not in payload:
-            return jsonify({'error': f'Missing field: {c}'}), 400
-
-    new_id = int(df['RecordID'].max()) + 1 if not df.empty else 1
-    record = {c: payload.get(c) for c in required_cols}
-    churn = predict_churn(record)
-    record['Churn Value'] = churn
+    record, errors = validate_and_coerce(payload, dfu)
+    if errors:
+        return jsonify({'error': 'Validation failed', 'details': errors}), 400
+    new_id = int(dfu['RecordID'].max()) + 1 if not dfu.empty else 1
     record['RecordID'] = new_id
-
-    df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
-    save_df()
-    generate_plots(df)
+    record['Churn Value'] = predict_churn(record, dfu)
+    dfu = pd.concat([dfu, pd.DataFrame([record])], ignore_index=True)
+    save_user_df(current_user.id, dfu)
+    generate_plots(dfu, current_user.id)
     return jsonify({'ok': True, 'record': record})
 
 
 @app.route('/api/data/<int:record_id>', methods=['PUT', 'PATCH'])
 @login_required
 def update_record(record_id: int):
+    dfu = load_user_df(current_user.id)
     payload = request.get_json(force=True)
-    idx = df.index[df['RecordID'] == record_id]
+    idx = dfu.index[dfu['RecordID'] == record_id]
     if idx.empty:
         return jsonify({'error': 'Record not found'}), 404
     i = idx[0]
-    for k, v in payload.items():
-        if k in df.columns and k not in ['RecordID']:
-            df.at[i, k] = v
-
-    # Recompute churn if any feature changed
-    feature_columns = [c for c in df.columns if c not in ['Churn Value', 'RecordID']]
-    record = df.loc[i, feature_columns].to_dict()
-    df.at[i, 'Churn Value'] = predict_churn(record)
-    save_df()
-    generate_plots(df)
-    return jsonify({'ok': True, 'record': df.loc[i].to_dict()})
+    updated, errors = validate_and_coerce(payload, dfu)
+    if errors:
+        return jsonify({'error': 'Validation failed', 'details': errors}), 400
+    for k, v in updated.items():
+        if k in dfu.columns and k not in ['RecordID']:
+            dfu.at[i, k] = v
+    feature_columns = [c for c in dfu.columns if c not in ['Churn Value', 'RecordID']]
+    record = dfu.loc[i, feature_columns].to_dict()
+    dfu.at[i, 'Churn Value'] = predict_churn(record, dfu)
+    save_user_df(current_user.id, dfu)
+    generate_plots(dfu, current_user.id)
+    return jsonify({'ok': True, 'record': dfu.loc[i].to_dict()})
 
 
 @app.route('/api/data/<int:record_id>', methods=['DELETE'])
 @login_required
 def delete_record(record_id: int):
-    global df
-    before = len(df)
-    df = df[df['RecordID'] != record_id].reset_index(drop=True)
-    if len(df) == before:
+    dfu = load_user_df(current_user.id)
+    before = len(dfu)
+    dfu = dfu[dfu['RecordID'] != record_id].reset_index(drop=True)
+    if len(dfu) == before:
         return jsonify({'error': 'Record not found'}), 404
-    save_df()
-    generate_plots(df)
+    save_user_df(current_user.id, dfu)
+    generate_plots(dfu, current_user.id)
     return jsonify({'ok': True})
 
 
 @app.route('/api/stats', methods=['GET'])
 @login_required
 def stats():
-    total = len(df)
-    churn_rate = float(df['Churn Value'].mean()) if 'Churn Value' in df.columns and total > 0 else 0.0
-    churn_counts = df['Churn Value'].value_counts().to_dict() if 'Churn Value' in df.columns else {}
-    by_city = df['City'].value_counts().head(10).to_dict() if 'City' in df.columns else {}
-    summary = df.describe(include='all').fillna('').to_dict()
-    feature_columns = [c for c in df.columns if c not in ['Churn Value', 'City', 'Zip Code', 'RecordID']]
+    dfu = load_user_df(current_user.id)
+    total = len(dfu)
+    churn_rate = float(dfu['Churn Value'].mean()) if 'Churn Value' in dfu.columns and total > 0 else 0.0
+    churn_counts = dfu['Churn Value'].value_counts().to_dict() if 'Churn Value' in dfu.columns else {}
+    by_city = dfu['City'].value_counts().head(10).to_dict() if 'City' in dfu.columns else {}
+    summary = dfu.describe(include='all').fillna('').to_dict()
+    feature_columns = [c for c in dfu.columns if c not in ['Churn Value', 'City', 'Zip Code', 'RecordID']]
     importances = None
     try:
         if len(getattr(rf_model, 'feature_importances_', [])) == len(feature_columns):
@@ -300,8 +358,10 @@ def stats():
 @app.route('/api/refresh_plots', methods=['POST'])
 @login_required
 def refresh_plots():
-    plots = generate_plots(df)
-    return jsonify({'ok': True, 'plots': plots})
+    dfu = load_user_df(current_user.id)
+    plots = generate_plots(dfu, current_user.id)
+    urls = {k: url_for('static', filename=v) for k, v in plots.items()}
+    return jsonify({'ok': True, 'plots': urls})
 
 
 def render_pdf_from_html(source_html: str, output_filename: str) -> bytes:
@@ -314,15 +374,22 @@ def render_pdf_from_html(source_html: str, output_filename: str) -> bytes:
 @app.route('/report/pdf')
 @login_required
 def report_pdf():
-    plots = generate_plots(df)
-    # limited snapshot of dataset for PDF
-    snapshot = df.head(30).copy()
+    dfu = load_user_df(current_user.id)
+    plots = generate_plots(dfu, current_user.id)
     stats_resp = {
-        'total_records': len(df),
-        'churn_rate': float(df['Churn Value'].mean()) if 'Churn Value' in df.columns and len(df) > 0 else 0.0,
-        'churn_counts': df['Churn Value'].value_counts().to_dict() if 'Churn Value' in df.columns else {},
+        'total_records': len(dfu),
+        'churn_rate': float(dfu['Churn Value'].mean()) if 'Churn Value' in dfu.columns and len(dfu) > 0 else 0.0,
+        'churn_counts': dfu['Churn Value'].value_counts().to_dict() if 'Churn Value' in dfu.columns else {},
     }
-    html = render_template('report.html', plots=plots, stats=stats_resp, now=datetime.utcnow(), columns=list(snapshot.columns), rows=snapshot.to_dict(orient='records'))
+    # include feature importance if aligned
+    feature_columns = [c for c in dfu.columns if c not in ['Churn Value', 'City', 'Zip Code', 'RecordID']]
+    try:
+        if len(getattr(rf_model, 'feature_importances_', [])) == len(feature_columns):
+            s = pd.Series(rf_model.feature_importances_, index=feature_columns).sort_values(ascending=False)
+            stats_resp['feature_importance'] = s.head(15).round(4).to_dict()
+    except Exception:
+        pass
+    html = render_template('report.html', plots=plots, stats=stats_resp, now=datetime.utcnow())
     pdf_bytes = render_pdf_from_html(html, 'report.pdf')
     return send_file(io.BytesIO(pdf_bytes), mimetype='application/pdf', as_attachment=True, download_name='retainiq_report.pdf')
 
