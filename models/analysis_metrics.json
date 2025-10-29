@@ -1,0 +1,8 @@
+{
+  "clustering": {
+    "kmeans": {
+      "k": 4,
+      "silhouette": 0.0712555154675477
+    }
+  }
+}

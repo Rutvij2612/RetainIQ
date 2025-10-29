@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import pandas as pd
+import numpy as np
 import joblib
 import matplotlib
 matplotlib.use('Agg')
@@ -13,6 +14,10 @@ import io
 import os
 from datetime import datetime
 from xhtml2pdf import pisa
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, classification_report, roc_auc_score, silhouette_score, mean_squared_error, mean_absolute_error, r2_score, precision_score, recall_score, f1_score, confusion_matrix
 import json
 global df
 
@@ -53,8 +58,13 @@ os.makedirs(user_data_dir, exist_ok=True)
 
 # Load model
 rf_model = joblib.load(os.path.join(models_dir, 'rf_model.pkl'))
+# Optional clustering model
+try:
+    kmeans_model = joblib.load(os.path.join(models_dir, 'kmeans_cluster.pkl'))
+except Exception:
+    kmeans_model = None
 
-# Base dataset (used to initialize per-user copies)
+# Base dataset (used to initialize per-user copies) - using preprocessed data
 base_csv_path = os.path.join(models_dir, 'cleaned_data.csv')
 base_df = pd.read_csv(base_csv_path)
 if 'RecordID' not in base_df.columns:
@@ -150,7 +160,8 @@ def generate_plots(current_df: pd.DataFrame, user_id: int | None = None) -> dict
             feat_imp = pd.Series(importances, index=feature_columns).sort_values(ascending=False)
             plt.figure(figsize=(10, 6))
             sns.barplot(x=feat_imp[:10], y=feat_imp[:10].index, palette='viridis')
-            plt.title('Top 10 Feature Importances - Random Forest (Preprocessing)')
+            plt.title('Top 10 Feature Importances - Random Forest')
+            plt.xlabel('Importance')
             out = os.path.join(static_dir, f'feature_importance_plot{suffix}.png')
             plt.savefig(out, bbox_inches='tight')
             plt.close()
@@ -173,6 +184,61 @@ def generate_plots(current_df: pd.DataFrame, user_id: int | None = None) -> dict
         path = os.path.join(static_dir, fname)
         if os.path.exists(path):
             plots[key] = os.path.basename(path)
+
+    # KMeans clustering visualization (2D PCA scatter)
+    try:
+        if kmeans_model is not None:
+            # Attempt to use overlapping numeric columns between df and model input
+            df_num = current_df.select_dtypes(include=['number']).copy()
+            for col in ['Churn Value', 'RecordID']:
+                if col in df_num.columns:
+                    df_num = df_num.drop(columns=[col])
+            if df_num.shape[1] >= 2 and len(df_num) > 0:
+                cols = getattr(kmeans_model, 'feature_names_in_', None)
+                if cols is not None:
+                    common = [c for c in cols if c in df_num.columns]
+                    if len(common) < 2:
+                        raise ValueError('Insufficient common features for KMeans visualization')
+                    X = df_num[common]
+                else:
+                    X = df_num
+                # Standardize for stable PCA layout
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X)
+
+                # Determine labels
+                labels = None
+                # If saved model is a pipeline, use it directly
+                if hasattr(kmeans_model, 'steps'):
+                    try:
+                        labels = kmeans_model.predict(X)
+                    except Exception:
+                        labels = None
+                if labels is None:
+                    # Refit a local KMeans purely for visualization with same k
+                    k = getattr(kmeans_model, 'n_clusters', 2)
+                    km_vis = KMeans(n_clusters=int(k), n_init=10, random_state=42)
+                    labels = km_vis.fit_predict(X_scaled)
+
+                # PCA to 2D for visualization
+                pca = PCA(n_components=2, random_state=42)
+                comps = pca.fit_transform(X_scaled)
+
+                # Count per cluster for title context
+                unique, counts = pd.Series(labels).value_counts().index.tolist(), pd.Series(labels).value_counts().tolist()
+                counts_text = ', '.join([f"C{u}:{c}" for u, c in zip(unique, counts)])
+
+                plt.figure(figsize=(7, 5))
+                sns.scatterplot(x=comps[:,0], y=comps[:,1], hue=labels, palette='tab10', s=20, legend=False)
+                plt.title(f'K-Means Clusters (PCA-2D)  |  {counts_text}')
+                plt.xlabel('PC1')
+                plt.ylabel('PC2')
+                out = os.path.join(static_dir, f'kmeans_2d{suffix}.png')
+                plt.savefig(out, bbox_inches='tight')
+                plt.close()
+                plots['kmeans_2d'] = os.path.basename(out)
+    except Exception:
+        pass
 
     return plots
 
@@ -208,7 +274,7 @@ def infer_schema(current_df: pd.DataFrame) -> list:
     return schema
 
 
-def validate_and_coerce(payload: dict, df_ref: pd.DataFrame) -> tuple[dict, list[str]]:
+def validate_and_coerce(payload: dict, df_ref: pd.DataFrame, strict_range_check: bool = False) -> tuple[dict, list[str]]:
     errors: list[str] = []
     coerced: dict = {}
     describe = df_ref.describe(include='all')
@@ -223,7 +289,8 @@ def validate_and_coerce(payload: dict, df_ref: pd.DataFrame) -> tuple[dict, list
         if any(x in dtype for x in ['int', 'float']):
             try:
                 num = float(val)
-                if col in describe.columns:
+                # Only check range if strict mode is enabled (for updates)
+                if strict_range_check and col in describe.columns:
                     minv = describe[col].get('min')
                     maxv = describe[col].get('max')
                     if pd.notna(minv) and num < float(minv):
@@ -319,7 +386,8 @@ def get_schema():
 def add_record():
     dfu = load_user_df(current_user.id)
     payload = request.get_json(force=True)
-    record, errors = validate_and_coerce(payload, dfu)
+    # Use lenient validation for adding new records
+    record, errors = validate_and_coerce(payload, dfu, strict_range_check=False)
     if errors:
         return jsonify({'error': 'Validation failed', 'details': errors}), 400
     new_id = int(dfu['RecordID'].max()) + 1 if not dfu.empty else 1
@@ -340,7 +408,8 @@ def update_record(record_id: int):
     if idx.empty:
         return jsonify({'error': 'Record not found'}), 404
     i = idx[0]
-    updated, errors = validate_and_coerce(payload, dfu)
+    # Use strict validation for updates to maintain data integrity
+    updated, errors = validate_and_coerce(payload, dfu, strict_range_check=True)
     if errors:
         return jsonify({'error': 'Validation failed', 'details': errors}), 400
     for k, v in updated.items():
@@ -462,7 +531,7 @@ def analysis():
             'text': f"k: {kinfo.get('k', 'NA')}, features: {', '.join(kinfo.get('features_used', []))}"
         })
 
-    return jsonify({'sections': sections})
+    return jsonify({'sections': sections, 'metrics': metrics})
 
 
 @app.route('/api/refresh_plots', methods=['POST'])
@@ -472,6 +541,153 @@ def refresh_plots():
     plots = generate_plots(dfu, current_user.id)
     urls = {k: url_for('static', filename=v) for k, v in plots.items()}
     return jsonify({'ok': True, 'plots': urls})
+
+
+@app.route('/api/analysis/download')
+@login_required
+def download_analysis_json():
+    metrics_path = os.path.join(models_dir, 'analysis_metrics.json')
+    if os.path.exists(metrics_path):
+        return send_file(metrics_path, as_attachment=True, download_name='analysis_metrics.json')
+    else:
+        return jsonify({'error': 'Analysis metrics file not found'}), 404
+
+
+def generate_analysis_metrics_file(dfu: pd.DataFrame) -> dict:
+    metrics: dict = {}
+    # Classification using rf_model if label present
+    if 'Churn Value' in dfu.columns:
+        feature_columns = [c for c in dfu.columns if c not in ['Churn Value', 'RecordID']]
+        X = dfu[feature_columns]
+        y = dfu['Churn Value']
+        try:
+            y_pred = rf_model.predict(X)
+            y_prob = None
+            try:
+                proba = getattr(rf_model, 'predict_proba', None)
+                if proba is not None:
+                    y_prob = rf_model.predict_proba(X)[:, 1]
+            except Exception:
+                pass
+            
+            # Comprehensive classification metrics
+            cls: dict = {
+                'rf': {
+                    'accuracy': float(accuracy_score(y, y_pred)),
+                    'precision': float(precision_score(y, y_pred, average='weighted')),
+                    'recall': float(recall_score(y, y_pred, average='weighted')),
+                    'f1_score': float(f1_score(y, y_pred, average='weighted')),
+                    'confusion_matrix': confusion_matrix(y, y_pred).tolist()
+                }
+            }
+            
+            # ROC AUC if probabilities available
+            if y_prob is not None:
+                try:
+                    cls['rf']['roc_auc'] = float(roc_auc_score(y, y_prob))
+                except Exception:
+                    pass
+            
+            # Detailed classification report
+            try:
+                cls['rf']['classification_report'] = classification_report(y, y_pred, output_dict=True)
+            except Exception:
+                pass
+                
+            # Per-class metrics
+            try:
+                cls['rf']['precision_per_class'] = precision_score(y, y_pred, average=None).tolist()
+                cls['rf']['recall_per_class'] = recall_score(y, y_pred, average=None).tolist()
+                cls['rf']['f1_per_class'] = f1_score(y, y_pred, average=None).tolist()
+            except Exception:
+                pass
+                
+            metrics['classification'] = cls
+        except Exception:
+            pass
+
+    # Regression (optional): evaluate Monthly Charges regressor if available
+    try:
+        monthly_reg_path = os.path.join(models_dir, 'Monthly_Charges_regressor.pkl')
+        if os.path.exists(monthly_reg_path) and 'Monthly Charges' in dfu.columns:
+            reg_model = joblib.load(monthly_reg_path)
+            target = 'Monthly Charges'
+            feature_cols = [c for c in dfu.columns if c not in ['RecordID', 'Churn Value', target]]
+            Xr = dfu[feature_cols]
+            yr = dfu[target]
+            try:
+                yhat = reg_model.predict(Xr)
+                rmse = float(mean_squared_error(yr, yhat, squared=False))
+                mae = float(mean_absolute_error(yr, yhat))
+                r2 = float(r2_score(yr, yhat))
+                mse = float(mean_squared_error(yr, yhat))
+                
+                # Additional regression metrics
+                residuals = yr - yhat
+                mape = float(np.mean(np.abs((yr - yhat) / yr)) * 100) if (yr != 0).any() else None
+                
+                reg_metrics = {
+                    'rmse': rmse, 
+                    'mae': mae, 
+                    'r2': r2,
+                    'mse': mse,
+                    'residuals_mean': float(np.mean(residuals)),
+                    'residuals_std': float(np.std(residuals))
+                }
+                
+                if mape is not None:
+                    reg_metrics['mape'] = mape
+                    
+                metrics.setdefault('regression', {})['monthly_charges_regressor'] = reg_metrics
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Clustering (optional): silhouette using kmeans_model
+    try:
+        if kmeans_model is not None:
+            df_num = dfu.select_dtypes(include=['number']).copy()
+            for col in ['Churn Value', 'RecordID']:
+                if col in df_num.columns:
+                    df_num = df_num.drop(columns=[col])
+            if df_num.shape[1] >= 2 and len(df_num) > 1:
+                cols = getattr(kmeans_model, 'feature_names_in_', None)
+                Xc = df_num[cols] if cols is not None and all(c in df_num.columns for c in cols) else df_num
+                scaler = StandardScaler()
+                Xc_scaled = scaler.fit_transform(Xc)
+                # Predict or fit for labels
+                try:
+                    labels = kmeans_model.predict(Xc)
+                except Exception:
+                    k = getattr(kmeans_model, 'n_clusters', 2)
+                    km = KMeans(n_clusters=int(k), n_init=10, random_state=42)
+                    labels = km.fit_predict(Xc_scaled)
+                if len(set(labels)) > 1:
+                    sil = float(silhouette_score(Xc_scaled, labels))
+                    metrics.setdefault('clustering', {})['kmeans'] = {
+                        'k': int(getattr(kmeans_model, 'n_clusters', len(set(labels)))),
+                        'silhouette': sil
+                    }
+    except Exception:
+        pass
+
+    # Persist
+    out_path = os.path.join(models_dir, 'analysis_metrics.json')
+    try:
+        with open(out_path, 'w') as f:
+            json.dump(metrics, f, indent=2)
+    except Exception:
+        pass
+    return metrics
+
+
+@app.route('/api/analysis/generate', methods=['POST'])
+@login_required
+def generate_analysis():
+    dfu = load_user_df(current_user.id)
+    metrics = generate_analysis_metrics_file(dfu)
+    return jsonify({'ok': True, 'metrics': metrics})
 
 
 def render_pdf_from_html(source_html: str, output_filename: str) -> bytes:

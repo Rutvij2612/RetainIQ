@@ -48,6 +48,8 @@
     `;
     // Also fetch human-readable analysis sections
     let sectionsHtml = '';
+    let detailsHtml = '';
+    let downloadLink = '';
     try{
       const r = await fetch('/api/analysis');
       const a = await r.json();
@@ -58,8 +60,71 @@
           <div>${sec.text}</div>
         </div>
       `).join('');
-    }catch(e){ /* ignore */ }
-    analysisText.innerHTML = header + sectionsHtml;
+
+      // Detailed metrics block (classification reports, regression/clustering metrics)
+      if(a.metrics){
+        const m = a.metrics;
+        // small highlight summary if available
+        const highlights = [];
+        try { if(m.classification?.rf?.accuracy!=null) highlights.push(`RF Acc: ${m.classification.rf.accuracy.toFixed(3)}`); } catch(e){}
+        try { if(m.classification?.rf?.f1_score!=null) highlights.push(`RF F1: ${m.classification.rf.f1_score.toFixed(3)}`); } catch(e){}
+        try { if(m.classification?.rf?.roc_auc!=null) highlights.push(`RF ROC: ${m.classification.rf.roc_auc.toFixed(3)}`); } catch(e){}
+        try { if(m.regression?.monthly_charges_regressor?.rmse!=null) highlights.push(`RMSE: ${m.regression.monthly_charges_regressor.rmse.toFixed(3)}`); } catch(e){}
+        try { if(m.regression?.monthly_charges_regressor?.r2!=null) highlights.push(`R²: ${m.regression.monthly_charges_regressor.r2.toFixed(3)}`); } catch(e){}
+        try { if(m.clustering?.kmeans?.silhouette!=null) highlights.push(`KMeans Silhouette: ${m.clustering.kmeans.silhouette.toFixed(3)}`); } catch(e){}
+        detailsHtml = `
+          <div class="card" style="padding:8px;margin:8px 0;">
+            <h3 style="margin:0 0 6px 0;">Detailed Metrics</h3>
+            <div style="margin:4px 0 8px 0; color:#444;">${highlights.join(' | ')}</div>
+            <pre style="white-space:pre-wrap; max-height:400px; overflow:auto;">${JSON.stringify(m, null, 2)}</pre>
+          </div>
+        `;
+        // Add download link for JSON
+        downloadLink = `
+          <div class="card" style="padding:8px;margin:8px 0;">
+            <h3 style="margin:0 0 6px 0;">Download Analysis Data</h3>
+            <a href="/api/analysis/download" class="btn" style="display:inline-block;margin:4px 0;">Download analysis_metrics.json</a>
+          </div>
+        `;
+      } else {
+        // Show message if no metrics available
+        detailsHtml = `
+          <div class="card" style="padding:8px;margin:8px 0;">
+            <h3 style="margin:0 0 6px 0;">Analysis Data</h3>
+            <p>No detailed analysis metrics available. Run the analysis notebook to generate metrics.</p>
+            <a href="/api/analysis/download" class="btn" style="display:inline-block;margin:4px 0;">Check for analysis_metrics.json</a>
+            <button id="btnGenMetrics" class="btn" style="margin-left:8px;">Generate Now</button>
+          </div>
+        `;
+      }
+    }catch(e){ 
+      detailsHtml = `
+        <div class="card" style="padding:8px;margin:8px 0;">
+          <h3 style="margin:0 0 6px 0;">Analysis Data</h3>
+          <p>Error loading analysis data: ${e.message}</p>
+          <a href="/api/analysis/download" class="btn" style="display:inline-block;margin:4px 0;">Try downloading analysis_metrics.json</a>
+          <button id="btnGenMetrics" class="btn" style="margin-left:8px;">Generate Now</button>
+        </div>
+      `;
+    }
+    analysisText.innerHTML = header + sectionsHtml + detailsHtml + downloadLink;
+    // Wire the "Generate Now" button if present
+    const genBtn = document.getElementById('btnGenMetrics');
+    if(genBtn){
+      genBtn.onclick = async ()=>{
+        try{
+          genBtn.disabled = true; genBtn.textContent = 'Generating...';
+          const res = await fetch('/api/analysis/generate', { method:'POST' });
+          if(res.ok){
+            await fetchStats();
+          }else{
+            alert('Failed to generate analysis metrics');
+          }
+        }finally{
+          genBtn.disabled = false; genBtn.textContent = 'Generate Now';
+        }
+      };
+    }
   }
 
   function filteredRows(){
@@ -131,25 +196,51 @@
   async function renderAddForm(){
     const container = sectionAdd;
     container.innerHTML = '<h2>Add New Record</h2><div id="addForm"></div>';
-    const schema = await (await fetch('/api/schema')).json();
-    const featureFields = schema.filter(f=>f.required);
-    const form = document.createElement('form');
-    form.className = 'form';
-    featureFields.forEach(f=>{
-      const label = document.createElement('label'); label.textContent = f.name;
-      const input = f.choices ? buildSelect(f) : buildInput(f);
-      form.appendChild(label); form.appendChild(input);
-    });
-    const submit = document.createElement('button'); submit.className='btn primary'; submit.type='submit'; submit.textContent='Add';
-    form.appendChild(submit);
-    form.addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const payload = collectForm(form);
-      const res = await fetch('/api/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if(res.ok){ await fetchData(); await renderVisuals(); alert('Record added'); }
-      else { alert('Failed to add record'); }
-    });
-    container.appendChild(form);
+    try {
+      const schema = await (await fetch('/api/schema')).json();
+      console.log('Schema received:', schema);
+      const featureFields = schema.filter(f=>f.required);
+      console.log('Required fields:', featureFields);
+      
+      if (featureFields.length === 0) {
+        container.innerHTML = '<h2>Add New Record</h2><p>No required fields found. Check your dataset.</p>';
+        return;
+      }
+      
+      const form = document.createElement('form');
+      form.className = 'form';
+      featureFields.forEach(f=>{
+        const label = document.createElement('label'); 
+        label.textContent = f.name;
+        const input = f.choices ? buildSelect(f) : buildInput(f);
+        form.appendChild(label); 
+        form.appendChild(input);
+      });
+      const submit = document.createElement('button'); 
+      submit.className='btn primary'; 
+      submit.type='submit'; 
+      submit.textContent='Add';
+      form.appendChild(submit);
+      form.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const payload = collectForm(form);
+        console.log('Submitting payload:', payload);
+        const res = await fetch('/api/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        if(res.ok){ 
+          await fetchData(); 
+          await renderVisuals(); 
+          alert('Record added successfully!'); 
+        } else { 
+          const error = await res.json();
+          console.error('Add record error:', error);
+          alert('Failed to add record: ' + (error.details ? error.details.join(', ') : 'Unknown error'));
+        }
+      });
+      container.appendChild(form);
+    } catch (error) {
+      console.error('Error rendering add form:', error);
+      container.innerHTML = '<h2>Add New Record</h2><p>Error loading form: ' + error.message + '</p>';
+    }
   }
 
   function buildInput(f){
@@ -180,30 +271,54 @@
   }
   async function loadForModify(){
     const id = Number(document.getElementById('modId').value);
-    if(!id) return;
+    if(!id) { alert('Please enter a Record ID'); return; }
     const rec = rows.find(r=>Number(r.RecordID)===id);
     if(!rec) { alert('Record not found'); return; }
-    const schema = await (await fetch('/api/schema')).json();
-    const fields = schema.filter(f=>f.name!=='RecordID');
-    const wrap = document.getElementById('modFormWrap');
-    wrap.innerHTML='';
-    const form = document.createElement('form'); form.className='form';
-    fields.forEach(f=>{
-      const label = document.createElement('label'); label.textContent = f.name;
-      const input = f.choices ? buildSelect(f) : buildInput(f);
-      input.value = rec[f.name] ?? '';
-      form.appendChild(label); form.appendChild(input);
-    });
-    const submit = document.createElement('button'); submit.className='btn primary'; submit.type='submit'; submit.textContent='Save';
-    form.appendChild(submit);
-    form.addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const payload = collectForm(form); delete payload.RecordID;
-      const res = await fetch(`/api/data/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if(res.ok){ await fetchData(); await renderVisuals(); alert('Record updated'); }
-      else { alert('Failed to update'); }
-    });
-    wrap.appendChild(form);
+    
+    try {
+      const schema = await (await fetch('/api/schema')).json();
+      console.log('Schema for modify:', schema);
+      const fields = schema.filter(f=>f.name!=='RecordID');
+      console.log('Fields for modify:', fields);
+      
+      const wrap = document.getElementById('modFormWrap');
+      wrap.innerHTML='';
+      const form = document.createElement('form'); 
+      form.className='form';
+      fields.forEach(f=>{
+        const label = document.createElement('label'); 
+        label.textContent = f.name;
+        const input = f.choices ? buildSelect(f) : buildInput(f);
+        input.value = rec[f.name] ?? '';
+        form.appendChild(label); 
+        form.appendChild(input);
+      });
+      const submit = document.createElement('button'); 
+      submit.className='btn primary'; 
+      submit.type='submit'; 
+      submit.textContent='Save';
+      form.appendChild(submit);
+      form.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const payload = collectForm(form); 
+        delete payload.RecordID;
+        console.log('Updating record with payload:', payload);
+        const res = await fetch(`/api/data/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        if(res.ok){ 
+          await fetchData(); 
+          await renderVisuals(); 
+          alert('Record updated successfully!'); 
+        } else { 
+          const error = await res.json();
+          console.error('Update error:', error);
+          alert('Failed to update: ' + (error.details ? error.details.join(', ') : 'Unknown error'));
+        }
+      });
+      wrap.appendChild(form);
+    } catch (error) {
+      console.error('Error loading modify form:', error);
+      document.getElementById('modFormWrap').innerHTML = '<p>Error loading form: ' + error.message + '</p>';
+    }
   }
 
   async function renderDeleteForm(){

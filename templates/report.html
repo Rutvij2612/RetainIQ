@@ -31,11 +31,35 @@
             {% for key, fname in plots.items() %}
             <div>
                 <p class="muted">{{ key.replace('_', ' ').title() }}</p>
-                <img src="{{ url_for('static', filename=fname) }}" />
+                <img src="{{ fname }}" />
             </div>
             {% endfor %}
         </div>
     </div>
+
+    {% if advanced_metrics %}
+    <div class="card">
+        <h2>Detailed Metrics</h2>
+        {% if advanced_metrics.classification %}
+        <div class="card">
+            <h3>Classification</h3>
+            <pre style="white-space:pre-wrap;">{{ advanced_metrics.classification | tojson(indent=2) }}</pre>
+        </div>
+        {% endif %}
+        {% if advanced_metrics.regression %}
+        <div class="card">
+            <h3>Regression</h3>
+            <pre style="white-space:pre-wrap;">{{ advanced_metrics.regression | tojson(indent=2) }}</pre>
+        </div>
+        {% endif %}
+        {% if advanced_metrics.clustering %}
+        <div class="card">
+            <h3>Clustering</h3>
+            <pre style="white-space:pre-wrap;">{{ advanced_metrics.clustering | tojson(indent=2) }}</pre>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 </body>
 </html>
 
