@@ -1,0 +1,81 @@
+<!-- templates/dashboard.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RetainIQ - Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script defer src="{{ url_for('static', filename='script.js') }}"></script>
+    <style>
+        .layout { display: grid; grid-template-columns: 1fr; gap: 16px; }
+        @media (min-width: 1000px) { .layout { grid-template-columns: 1.2fr 1fr; } }
+        .plots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+        .table-container { overflow: auto; max-height: 60vh; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { padding: 8px 10px; border-bottom: 1px solid #eee; white-space: nowrap; }
+        th { position: sticky; top: 0; background: #fafafa; z-index: 1; cursor: pointer; }
+        .toolbar { display:flex; gap: 8px; align-items:center; justify-content: space-between; }
+        .filters { display:flex; gap: 8px; flex-wrap: wrap; }
+        img { width:100%; height:auto; }
+    </style>
+</head>
+<body>
+    <nav class="topbar">
+        <div class="brand">RetainIQ</div>
+        <div class="actions">
+            <a class="btn" href="{{ url_for('logout') }}">Logout</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <section class="card">
+            <h2>Actions</h2>
+            <div class="actions" style="display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 4px;">
+                <button class="btn" id="btnViewDataset">View Dataset</button>
+                <button class="btn" id="btnAddRecord">Add New Record</button>
+                <button class="btn" id="btnModifyRecord">Modify Existing Record</button>
+                <button class="btn" id="btnDeleteRecord">Delete Record</button>
+                <button class="btn" id="btnViewAnalysis">View Analysis</button>
+                <button class="btn" id="btnVisualizeGraphs">Visualize Graphs</button>
+                <a class="btn" id="btnExportPDF" href="{{ url_for('report_pdf') }}">Export as PDF</a>
+            </div>
+        </section>
+
+        <!-- Hidden Sections, revealed on demand -->
+        <section class="card" id="sectionDataset" style="display:none;">
+            <div class="toolbar">
+                <h2>Dataset</h2>
+                <div class="filters">
+                    <input id="filterText" placeholder="Filter by City or Zip" />
+                    <button class="btn" id="refreshData">Refresh</button>
+                </div>
+            </div>
+            <div class="table-container">
+                <table id="dataTable"></table>
+            </div>
+        </section>
+
+        <section class="card" id="sectionAdd" style="display:none;"></section>
+        <section class="card" id="sectionModify" style="display:none;"></section>
+        <section class="card" id="sectionDelete" style="display:none;"></section>
+
+        <section class="card" id="sectionAnalysis" style="display:none;">
+            <h2>Analysis</h2>
+            <div id="analysisText"></div>
+        </section>
+
+        <section class="card" id="sectionVisuals" style="display:none;">
+            <h2>Interactive Visualizations</h2>
+            <div id="visualsContainer" class="plots"></div>
+        </section>
+    </main>
+
+    <template id="rowFormTemplate">
+        <form class="form" id="rowForm"></form>
+    </template>
+
+    <script>
+        window.RetainIQ = { };
+    </script>
+</body>
+</html>

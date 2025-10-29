@@ -1,0 +1,41 @@
+<!-- templates/report.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>RetainIQ Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 12px; color: #222; }
+        h1, h2 { margin: 0 0 8px 0; }
+        .muted { color: #666; }
+        .row { display: flex; gap: 12px; }
+        .card { border: 1px solid #ddd; padding: 10px; border-radius: 6px; margin-bottom: 10px; }
+        img { max-width: 100%; height: auto; border: 1px solid #eee; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    </style>
+    </head>
+<body>
+    <h1>RetainIQ - Analysis Report</h1>
+    <p class="muted">Generated at {{ now.strftime('%Y-%m-%d %H:%M:%S') }} UTC</p>
+
+    <div class="card">
+        <h2>Overview</h2>
+        <p>Total Records: <strong>{{ stats.total_records }}</strong></p>
+        <p>Churn Rate: <strong>{{ '%.1f' % (stats.churn_rate*100) }}%</strong></p>
+        <p>Churn Counts: <strong>{{ stats.churn_counts }}</strong></p>
+    </div>
+
+    <div class="card">
+        <h2>Visualizations</h2>
+        <div class="grid">
+            {% for key, fname in plots.items() %}
+            <div>
+                <p class="muted">{{ key.replace('_', ' ').title() }}</p>
+                <img src="{{ url_for('static', filename=fname) }}" />
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
+

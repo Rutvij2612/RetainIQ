@@ -37,15 +37,29 @@
   async function fetchStats(){
     const res = await fetch('/api/stats');
     const s = await res.json();
-    analysisText.innerHTML = `
+    const header = `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;">
         <div><strong>Total</strong><div>${s.total_records}</div></div>
         <div><strong>Churn rate</strong><div>${(s.churn_rate*100).toFixed(1)}%</div></div>
         <div><strong>Churn counts</strong><div>${Object.entries(s.churn_counts||{}).map(([k,v])=>`${k}:${v}`).join(', ')}</div></div>
       </div>
-      <h3>Feature Importance</h3>
+      <h3>Feature Importance (Top 10)</h3>
       <pre style="white-space:pre-wrap;">${JSON.stringify(s.feature_importance||{}, null, 2)}</pre>
     `;
+    // Also fetch human-readable analysis sections
+    let sectionsHtml = '';
+    try{
+      const r = await fetch('/api/analysis');
+      const a = await r.json();
+      const sections = a.sections || [];
+      sectionsHtml = sections.map(sec=>`
+        <div class="card" style="padding:8px;margin:8px 0;">
+          <h3 style="margin:0 0 6px 0;">${sec.title}</h3>
+          <div>${sec.text}</div>
+        </div>
+      `).join('');
+    }catch(e){ /* ignore */ }
+    analysisText.innerHTML = header + sectionsHtml;
   }
 
   function filteredRows(){
