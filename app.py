@@ -14,6 +14,7 @@ import io
 import os
 from datetime import datetime
 from xhtml2pdf import pisa
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -98,6 +99,31 @@ def save_user_df(user_id: int, dfu: pd.DataFrame) -> None:
 def generate_plots(current_df: pd.DataFrame, user_id: int | None = None) -> dict:
     plots = {}
     suffix = f'_user_{user_id}' if user_id is not None else ''
+    
+    # Random Forest Feature Importance
+    if 'Churn Value' in current_df.columns:
+        try:
+            X_rf = pd.get_dummies(current_df.drop(columns=['Churn Value']), drop_first=True)
+            y_rf = current_df['Churn Value']
+
+            rf = RandomForestClassifier(
+                random_state=42, n_estimators=200, max_depth=8,
+                min_samples_split=5, min_samples_leaf=3
+            )
+            rf.fit(X_rf, y_rf)
+
+            feat_imp = pd.Series(rf.feature_importances_, index=X_rf.columns).sort_values(ascending=False)[:10]
+            plt.figure(figsize=(8, 5))
+            sns.barplot(x=feat_imp, y=feat_imp.index, palette='viridis')
+            plt.title("Top 10 Feature Importances - Random Forest")
+            out = os.path.join(static_dir, f'feature_importance_plot{suffix}.png')
+            plt.savefig(out, bbox_inches='tight')
+            plt.close()
+            plots['feature_importance_plot'] = os.path.basename(out)
+        except Exception as e:
+            print("⚠️ Random Forest plot error:", e)
+
+    
     # Churn Distribution
     if 'Churn Value' in current_df.columns:
         plt.figure(figsize=(5, 4))
